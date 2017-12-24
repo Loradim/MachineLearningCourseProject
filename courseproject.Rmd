@@ -1,0 +1,111 @@
+---
+title: "Courseproject Machine Learning"
+author: "Heiko Lange"
+date: "23 12 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, message=FALSE}
+# preload all libraries and prevent unecessary output messages
+library(caret)
+library(randomForest)
+library(survival)
+library(splines)
+library(parallel)
+library(gbm)
+```
+
+# Course Project
+
+### Problem Statement
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+### Synopsis
+For this prediction task, I will compare Random Forest prediction to Stochastic Gradient Boosting, two of the better and more popular prediction algorithms. Both models will be trained with cross validation and the better of the two models is chosen based on the estimated out of sample error. To get a better estimation of the real out of sample error, we will also run the better model against an unused part of the data to get an even better estimation for out of sample error. Last but not least, I will predict the outcome of the provided test set, which is also needed to complete the prediction task.
+
+### Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+# Analysis
+
+### Downloading data
+```{r}
+full_training <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"))
+full_testing <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"))
+```
+
+### Preprocessing
+Many variables don't add information and others contain mostly NA values and aren't helpful either. Additionally there are some variables which don't seem to have a meaningful correlation with the result, like timestamps or activity windows. These will be filtered out as part of the preprocessing.
+```{r}
+nvz <- nearZeroVar(full_training)
+full_training <- full_training[,-nvz]
+full_training <- full_training[,colSums(is.na(full_training)) / dim(full_training)[1] <= 0.5]
+drop_cols <- c("X", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")
+full_training <- full_training[,!names(full_training) %in% drop_cols]
+```
+
+### Data splitting
+I will split the data in 70% training set and 30% validation set. Training set will be used to train two different models with cross validation. Thanks to cross validation, we can estimate the out of sample accuracy and select the better of the two models. The validation set will be used afterwards to compare the estimated out of sample accuracy with an (so far) unused validation set of data.
+```{r}
+set.seed(23456)
+inTrain <- createDataPartition(full_training[,1], p = 0.7, list = FALSE)
+training_set <- full_training[inTrain,]
+validation_set <- full_training[-inTrain,]
+```
+
+### Training different models
+I will train two of the most common and successful models, Random Forest and Gradient Boosting using carets build in cross validation. We will then select the best model and compare estimated out of sample accuracy to accuracy on the validation set of the data split.
+
+```{r}
+trainingControl <- trainControl(method = "cv", number = 10)
+fit_rf <- train(classe ~ ., data = training_set, trControl = trainingControl, method = "rf")
+fit_gbm <- train(classe ~ ., data = training_set, trControl = trainingControl, method = "gbm", verbose = FALSE)
+```
+
+### Estimating Out of Sample error
+Based on the best results for both Random Forest and Stochastic Gradient Boosting, I will calculate a 95% confidence interval for the expected accuracy.
+
+```{r}
+best_rf <- which.max(fit_rf$results$Accuracy)
+best_gbm <- which.max(fit_gbm$results$Accuracy)
+df <- data.frame(model = c("Random Forest", "Stachastic Gradient Boosting"),
+                 mean = c(fit_rf$results$Accuracy[best_rf], fit_gbm$results$Accuracy[best_gbm]),
+                 lowCI = c(fit_rf$results$Accuracy[best_rf] + qnorm(0.025) * fit_rf$results$AccuracySD[best_rf],
+                           fit_gbm$results$Accuracy[best_gbm] + qnorm(0.025) * fit_gbm$results$AccuracySD[best_gbm]),
+                 highCI = c(fit_rf$results$Accuracy[best_rf] + qnorm(0.975) * fit_rf$results$AccuracySD[best_rf],
+                            fit_gbm$results$Accuracy[best_gbm] + qnorm(0.975) * fit_gbm$results$AccuracySD[best_gbm]))
+df
+```
+
+### Choosing a model
+Best model will be chosen by estimated out of sample accuracy. Also I compare estimated out of sampel accuracy to accuracy on validation data set.
+```{r}
+if (fit_rf$results$Accuracy[best_rf] >= fit_gbm$results$Accuracy[best_gbm]) {
+    fit_final <- fit_rf; model_final <- "Random Forest"
+} else {
+    fit_final <- fit_gbm; model_final <- "Stochastic Gradient Boosting"
+}
+cm <- confusionMatrix(predict(fit_final, newdata = validation_set), validation_set$classe)
+df2 <- data.frame(model = model_final, estimatedOOSerror = fit_final$results$Accuracy[best_rf], validationOOSerror = cm$overall[1])
+print(df2)
+```
+
+### Prediction on Test Set for Quiz
+To complete the course project, I also need to predict on the test set provided.
+```{r}
+predict(fit_final, newdata = full_testing)
+```
+
+# Appendix
+
+### Sources
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+
+### Information for reproducibility
+```{r}
+sessionInfo()
+```
